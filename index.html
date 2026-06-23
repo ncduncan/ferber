@@ -73,6 +73,7 @@ var IDLE="idle", WAITING="waiting", VISIT="visit", STAYING="staying";
 var st = {day:1,visitNum:0,phase:IDLE,timerEnd:null,log:[]};
 var currentAction = null;
 var audioCtx = null;
+var audioUnlocked = false;
 
 function getWait(day, visit) {
   var row = FERBER[Math.min(day-1, FERBER.length-1)];
@@ -99,26 +100,32 @@ function load() {
   } catch(e) {}
 }
 
-// Audio: use Web Audio API but initialize on first user tap
 function initAudio() {
-  if (audioCtx) return;
-  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    audioUnlocked = true;
+  } catch(e) {}
 }
+
 function playChime(freqs, times) {
-  if (!audioCtx) return;
-  var when = audioCtx.currentTime;
-  for (var i = 0; i < freqs.length; i++) {
-    (function(freq, t) {
-      var osc = audioCtx.createOscillator();
-      var gain = audioCtx.createGain();
-      osc.connect(gain); gain.connect(audioCtx.destination);
-      osc.type = "sine"; osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, when+t);
-      gain.gain.linearRampToValueAtTime(0.2, when+t+0.05);
-      gain.gain.exponentialRampToValueAtTime(0.001, when+t+1.2);
-      osc.start(when+t); osc.stop(when+t+1.3);
-    })(freqs[i], times[i]);
-  }
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    var when = audioCtx.currentTime + 0.05;
+    for (var i = 0; i < freqs.length; i++) {
+      (function(freq, t) {
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.type = "sine"; osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, when+t);
+        gain.gain.linearRampToValueAtTime(0.2, when+t+0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, when+t+1.2);
+        osc.start(when+t); osc.stop(when+t+1.3);
+      })(freqs[i], times[i]);
+    }
+  } catch(e) {}
 }
 function playGoIn()   { playChime([440,554],[0,0.25]); }
 function playLeave()  { playChime([554,440],[0,0.25]); }
@@ -221,6 +228,7 @@ function mainTap() {
   }
   save(); render();
 }
+
 function markAsleep() {
   initAudio();
   playAsleep();
@@ -229,17 +237,20 @@ function markAsleep() {
   addLog("Baby asleep 🎉 — if he wakes, check-in #"+nextVisit);
   save(); render();
 }
+
 function nextDay() {
   initAudio();
   st.day = st.day + 1; st.visitNum = 0; st.phase = IDLE; st.timerEnd = null;
   addLog("Advanced to Day "+st.day);
   save(); render();
 }
+
 function resetAll() {
   st = {day:1,visitNum:0,phase:IDLE,timerEnd:null,log:[]};
   addLog("Reset to Day 1");
   save(); render();
 }
+
 function toggleLog() {
   var d = document.getElementById("log-drawer");
   d.style.display = d.style.display === "block" ? "none" : "block";
