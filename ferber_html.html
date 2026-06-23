@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ferber Timer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+  min-height: 100vh; min-height: -webkit-fill-available;
+  background: #0d0d0d; color: #f0f0f0;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: space-between;
+  padding: 40px 24px 32px;
+}
+#topbar { width: 100%; max-width: 400px; display: flex; justify-content: space-between; font-size: 13px; color: rgba(255,255,255,0.35); }
+#center { text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 32px 0; }
+#headline { font-size: 72px; font-weight: 500; letter-spacing: -2px; line-height: 1; }
+#headline.idle { font-size: 42px; }
+#sub { font-size: 17px; color: rgba(255,255,255,0.5); line-height: 1.6; white-space: pre-line; }
+#buttons { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 12px; }
+.btn-main { width: 100%; padding: 24px 16px; font-size: 20px; font-weight: 500; color: #fff; border: none; border-radius: 16px; cursor: pointer; font-family: inherit; }
+.btn-secondary { width: 100%; padding: 16px; font-size: 16px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.6); border: none; border-radius: 12px; cursor: pointer; font-family: inherit; }
+#waittimes { display: flex; gap: 6px; justify-content: center; padding-top: 4px; }
+.wt { font-size: 12px; padding: 4px 10px; border-radius: 20px; color: rgba(255,255,255,0.25); }
+.wt.active { color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.1); }
+#bottombar { display: flex; gap: 8px; padding-top: 4px; }
+.btn-sm { flex: 1; padding: 10px; font-size: 12px; background: none; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer; font-family: inherit; color: rgba(255,255,255,0.35); }
+.btn-sm.danger { color: rgba(255,100,100,0.4); }
+#log-drawer { display: none; position: fixed; inset: 0; background: #0d0d0d; overflow-y: auto; padding: 32px 24px; z-index: 10; }
+.log-entry { display: flex; gap: 16px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.07); }
+.log-time { font-size: 12px; color: rgba(255,255,255,0.3); white-space: nowrap; padding-top: 2px; }
+.log-msg { font-size: 14px; color: rgba(255,255,255,0.7); line-height: 1.5; }
+.log-meta { font-size: 11px; color: rgba(255,255,255,0.25); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span id="day-label">Day 1</span>
+  <span id="visit-label"></span>
+</div>
+
+<div id="center">
+  <div id="headline" class="idle">Ready</div>
+  <div id="sub">Tap when you hear him.</div>
+</div>
+
+<div id="buttons">
+  <button class="btn-main" id="main-btn" style="background:rgba(255,80,80,0.85)" onclick="mainTap()">I hear him crying</button>
+  <button class="btn-secondary" id="asleep-btn" style="display:none" onclick="markAsleep()">He's asleep ✓</button>
+  <div id="waittimes"></div>
+  <div id="bottombar">
+    <button class="btn-sm" onclick="toggleLog()">Log <span id="log-count"></span></button>
+    <button class="btn-sm" onclick="nextDay()">Day <span id="next-day"></span> →</button>
+    <button class="btn-sm danger" onclick="resetAll()">Reset</button>
+  </div>
+</div>
+
+<div id="log-drawer">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
+    <span style="font-size:15px;font-weight:500">Event log</span>
+    <button class="btn-sm" style="flex:none;padding:6px 12px" onclick="toggleLog()">Close</button>
+  </div>
+  <div id="log-list"></div>
+</div>
+
+<script>
+var FERBER = [[3,5,10],[5,10,12],[10,12,15],[12,15,17],[15,17,20],[17,20,25],[20,25,30]];
+var STAY = 120;
+var IDLE="idle", WAITING="waiting", VISIT="visit", STAYING="staying";
+var st = {day:1,visitNum:0,phase:IDLE,timerEnd:null,log:[]};
+var currentAction = null;
+var audioCtx = null;
+
+function getWait(day, visit) {
+  var row = FERBER[Math.min(day-1, FERBER.length-1)];
+  return row[Math.min(visit-1, row.length-1)] * 60;
+}
+function fmt(s) {
+  var m = Math.floor(Math.abs(s)/60), sec = Math.abs(s)%60;
+  return m + ":" + (sec < 10 ? "0" : "") + sec;
+}
+function fmtTime(ts) {
+  return new Date(ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+}
+function addLog(msg) {
+  st.log.unshift({ts:Date.now(),msg:msg,day:st.day,visit:st.visitNum});
+  if (st.log.length > 100) st.log.pop();
+}
+function save() {
+  try { localStorage.setItem("ferber_v4", JSON.stringify(st)); } catch(e) {}
+}
+function load() {
+  try {
+    var r = localStorage.getItem("ferber_v4");
+    if (r) { var p = JSON.parse(r); st = p; st.phase = IDLE; st.timerEnd = null; }
+  } catch(e) {}
+}
+
+// Audio: use Web Audio API but initialize on first user tap
+function initAudio() {
+  if (audioCtx) return;
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+}
+function playChime(freqs, times) {
+  if (!audioCtx) return;
+  var when = audioCtx.currentTime;
+  for (var i = 0; i < freqs.length; i++) {
+    (function(freq, t) {
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = "sine"; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, when+t);
+      gain.gain.linearRampToValueAtTime(0.2, when+t+0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, when+t+1.2);
+      osc.start(when+t); osc.stop(when+t+1.3);
+    })(freqs[i], times[i]);
+  }
+}
+function playGoIn()   { playChime([440,554],[0,0.25]); }
+function playLeave()  { playChime([554,440],[0,0.25]); }
+function playAsleep() { playChime([440,554,660],[0,0.2,0.4]); }
+
+function render() {
+  var now = Date.now();
+  var secsLeft = st.timerEnd ? Math.max(0, Math.ceil((st.timerEnd - now) / 1000)) : null;
+  var phase = st.phase, day = st.day, visitNum = st.visitNum;
+  var dayRow = FERBER[Math.min(day-1, FERBER.length-1)];
+
+  document.getElementById("day-label").textContent = "Day " + day;
+  document.getElementById("visit-label").textContent = visitNum > 0 ? "Check-in #" + visitNum : "";
+  document.getElementById("next-day").textContent = day + 1;
+  document.getElementById("log-count").textContent = st.log.length > 0 ? "("+st.log.length+")" : "";
+
+  var wt = document.getElementById("waittimes");
+  wt.innerHTML = "";
+  for (var i = 0; i < dayRow.length; i++) {
+    var d = document.createElement("div");
+    d.className = "wt" + (visitNum === i+1 ? " active" : "");
+    d.textContent = dayRow[i] + "m";
+    wt.appendChild(d);
+  }
+
+  var hl = document.getElementById("headline");
+  var sub = document.getElementById("sub");
+  var btn = document.getElementById("main-btn");
+  var asleepBtn = document.getElementById("asleep-btn");
+
+  asleepBtn.style.display = phase !== IDLE ? "block" : "none";
+
+  if (phase === IDLE) {
+    hl.className = "idle"; hl.textContent = "Ready";
+    sub.textContent = visitNum > 1 ? "Next wake-up: check-in #"+visitNum+" interval." : "Tap when you hear him.";
+    btn.style.display = "block";
+    btn.textContent = "I hear him crying";
+    btn.style.background = "rgba(255,80,80,0.85)";
+    currentAction = "crying";
+
+  } else if (phase === WAITING && secsLeft > 0) {
+    hl.className = ""; hl.textContent = fmt(secsLeft);
+    sub.textContent = "Wait. He needs to try.\nCheck-in #"+visitNum+" coming up.";
+    btn.style.display = "none";
+    currentAction = null;
+
+  } else if ((phase === WAITING && secsLeft === 0) || phase === VISIT) {
+    hl.className = ""; hl.textContent = "Go in now";
+    sub.textContent = "Check-in #"+visitNum+" — keep it brief.\nPat, reassure, low voice.";
+    btn.style.display = "block";
+    btn.textContent = "I'm in the room";
+    btn.style.background = "rgba(80,140,255,0.85)";
+    currentAction = "inroom";
+
+  } else if (phase === STAYING && secsLeft > 0) {
+    hl.className = ""; hl.textContent = fmt(secsLeft);
+    sub.textContent = "Leave when this hits zero.\nNo picking up.";
+    btn.style.display = "block";
+    btn.textContent = "Leaving early";
+    btn.style.background = "rgba(80,140,255,0.65)";
+    currentAction = "leave";
+
+  } else if (phase === STAYING && secsLeft === 0) {
+    hl.className = ""; hl.textContent = "Leave now";
+    sub.textContent = "Time's up. He can do this.";
+    btn.style.display = "block";
+    btn.textContent = "I'm leaving";
+    btn.style.background = "rgba(255,160,50,0.85)";
+    currentAction = "leave";
+  }
+
+  var ll = document.getElementById("log-list");
+  if (st.log.length === 0) {
+    ll.innerHTML = '<div style="color:rgba(255,255,255,0.3);font-size:14px">No events yet.</div>';
+  } else {
+    var html = "";
+    for (var j = 0; j < st.log.length; j++) {
+      var e = st.log[j];
+      html += '<div class="log-entry"><div class="log-time">'+fmtTime(e.ts)+'</div><div class="log-msg">'+e.msg+'<div class="log-meta">Day '+e.day+(e.visit>0?' · #'+e.visit:'')+'</div></div></div>';
+    }
+    ll.innerHTML = html;
+  }
+}
+
+function mainTap() {
+  initAudio();
+  if (currentAction === "crying") {
+    var vn = Math.max(st.visitNum, 1);
+    var w = getWait(st.day, vn);
+    st.visitNum = vn; st.phase = WAITING; st.timerEnd = Date.now() + w*1000;
+    addLog("Crying started. Waiting "+Math.floor(w/60)+"m before check-in #"+vn);
+  } else if (currentAction === "inroom") {
+    st.phase = STAYING; st.timerEnd = Date.now() + STAY*1000;
+    addLog("Entered room — check-in #"+st.visitNum);
+  } else if (currentAction === "leave") {
+    playLeave();
+    var nv = st.visitNum + 1;
+    st.phase = WAITING; st.visitNum = nv; st.timerEnd = Date.now() + getWait(st.day, nv)*1000;
+    addLog("Left room. Waiting for check-in #"+nv);
+  }
+  save(); render();
+}
+function markAsleep() {
+  initAudio();
+  playAsleep();
+  var nextVisit = (st.visitNum || 0) + 1;
+  st.phase = IDLE; st.timerEnd = null; st.visitNum = nextVisit;
+  addLog("Baby asleep 🎉 — if he wakes, check-in #"+nextVisit);
+  save(); render();
+}
+function nextDay() {
+  initAudio();
+  st.day = st.day + 1; st.visitNum = 0; st.phase = IDLE; st.timerEnd = null;
+  addLog("Advanced to Day "+st.day);
+  save(); render();
+}
+function resetAll() {
+  st = {day:1,visitNum:0,phase:IDLE,timerEnd:null,log:[]};
+  addLog("Reset to Day 1");
+  save(); render();
+}
+function toggleLog() {
+  var d = document.getElementById("log-drawer");
+  d.style.display = d.style.display === "block" ? "none" : "block";
+}
+
+function tick() {
+  var now = Date.now();
+  if (st.phase === WAITING && st.timerEnd && now >= st.timerEnd) {
+    playGoIn();
+    st.phase = VISIT; st.timerEnd = null;
+    addLog("Time to visit — check-in #"+st.visitNum);
+    save();
+  } else if (st.phase === STAYING && st.timerEnd && now >= st.timerEnd) {
+    playLeave();
+    var nv = st.visitNum + 1;
+    st.phase = WAITING; st.visitNum = nv; st.timerEnd = Date.now() + getWait(st.day, nv)*1000;
+    addLog("Left room. Waiting for check-in #"+nv);
+    save();
+  }
+  render();
+}
+
+load();
+render();
+setInterval(tick, 500);
+</script>
+</body>
+</html>
